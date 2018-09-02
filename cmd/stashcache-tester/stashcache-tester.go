@@ -19,48 +19,57 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
 	"time"
 )
 
-var endpoints = []string{"stashcache.grid.uchicago.edu", "hcc-stash.unl.edu", "192.170.227.239"}
-var testSetDirs = []string{"/user/sthapa/public/test-sets/",
-	"/user/sthapa/public/test-sets/filetest/"}
-var testSets  = make(map[string][]string)
-
-func populateTestSets(testSets map[string][]string) {
-	for _, testDir := range testSetDirs {
-		switch testDir {
-		case "/user/sthapa/public/test-sets/":
-			testSets[testDir] = []string{testDir + "/test.1M",
-				testDir + "/test.100M",
-				testDir + "/test.1024M",
-				testDir + "/hashes"}
-		case "/user/sthapa/public/test-sets/filetest/":
-			fileList := make([]string, 101)
-			for i := 0; i < 100; i++ {
-				fileList[i] = fmt.Sprintf("/user/sthapa/test-sets/filetest/test_file.%d", i+1)
-			}
-			fileList[100] = "/user/sthapa/test-sets/filetest/hashes"
-			testSets[testDir] = fileList
-		}
-	}
+type TestSet struct {
+	DNSName     string   `json:"dnsname"`
+	SiteName    string   `json:"sitename"`
+	HashFile    string   `json:"hashfile"`
+	TestSetName string   `json:"testsetname"`
+	TestFiles   []string `json:"testfiles"`
 }
 
-func testDataSet(endpoint string, testSet string, resultChan chan bool) {
+func decodeJSON(configLocation string) (map[string][]TestSet, error) {
+	decodedConfig := make(map[string][]TestSet)
+	fileContents, err := ioutil.ReadFile(configLocation)
+	if err != nil {
+		log.Fatalf("Can't read config file %s, got error %s\n", configLocation, err)
+	}
+	var rawConfig []TestSet
+	err = json.Unmarshal(fileContents, &rawConfig)
+	if err != nil {
+		log.Fatal("Can't decode json from config file")
+	}
+	fmt.Printf("raw:\n%+v\n", rawConfig)
+	for _, val := range rawConfig {
+		if entry, ok := decodedConfig[val.SiteName]; ok {
+			decodedConfig[val.SiteName] = append(entry, val)
+		} else {
+			entry = []TestSet{val}
+			decodedConfig[val.SiteName] = entry
+		}
 
+	}
+	return decodedConfig, nil
+}
+
+func TestDataSet(ts TestSet, resultChan chan bool) {
 
 	workingDir, err := ioutil.TempDir(".", "")
-	if  err != nil {
+	if err != nil {
 		fmt.Printf("Couldn't create directory for %s\n", workingDir)
 	}
 	defer os.RemoveAll(workingDir)
 
 	curDir, err := os.Getwd()
-	if  err != nil {
+	if err != nil {
 		fmt.Println("Couldn't get current directory")
 		resultChan <- false
 		return
@@ -76,10 +85,10 @@ func testDataSet(endpoint string, testSet string, resultChan chan bool) {
 	defer cancel()
 
 	var out bytes.Buffer
-	for _, remoteFile := range testSets[testSet] {
+	for _, remoteFile := range ts.TestFiles {
 		// Setup context to terminate commands after 600 seconds
 
-		origURI := "root://" + endpoint + "/" + remoteFile
+		origURI := "root://" + ts.DNSName + "/" + remoteFile
 		cmd := exec.CommandContext(ctx, "xrdcp", origURI, ".")
 
 		cmd.Stdout = &out
@@ -89,8 +98,7 @@ func testDataSet(endpoint string, testSet string, resultChan chan bool) {
 			"XRD_TIMEOUTRESOLUTION=5", // Check for timeouts every 5s
 			"XRD_CONNECTIONWINDOW=30", // Wait 30s for initial TCP connection
 			"XRD_CONNECTIONRETRY=2",   // Retry 2 times
-			"XRD_STREAMTIMEOUT=30") // Wait 30s for TCP activity
-
+			"XRD_STREAMTIMEOUT=30")    // Wait 30s for TCP activity
 
 		if err := cmd.Run(); err != nil {
 			fmt.Printf("Can't download %s\nError: %s\n", origURI, err)
@@ -108,11 +116,11 @@ func testDataSet(endpoint string, testSet string, resultChan chan bool) {
 	resultChan <- true
 }
 
-func testEndpoint(endpoint string, c chan bool) {
+func TestEndpoint(testsets []TestSet, c chan bool) {
 	workDir, err := ioutil.TempDir("", "")
 	testsSucceeded := true
 	if err != nil {
-		fmt.Println("Couldn't create test directory for ", endpoint, ": ", err)
+		fmt.Println("Couldn't create test directory: ", err)
 		c <- false
 		return
 	}
@@ -129,12 +137,12 @@ func testEndpoint(endpoint string, c chan bool) {
 	}
 
 	testResultChan := make(chan bool)
-	for _, testSet := range testSetDirs {
-		go testDataSet(endpoint, testSet, testResultChan)
+	for _, ts := range testsets {
+		go TestDataSet(ts, testResultChan)
 		success := <-testResultChan
 		testsSucceeded = testsSucceeded && success
 		if !success {
-			fmt.Printf("Failed to verify %s using endpoint %s\n", testSet, endpoint)
+			fmt.Printf("Failed to verify %s using endpoint %s\n", ts.TestSetName, ts.SiteName)
 		}
 	}
 
@@ -148,14 +156,19 @@ func testEndpoint(endpoint string, c chan bool) {
 func main() {
 
 	c := make(chan bool)
-	populateTestSets(testSets)
-	for _, endpoint := range endpoints {
-		go testEndpoint(endpoint, c)
+	var testSets map[string][]TestSet
+	var err error
+	if testSets, err = decodeJSON("siteconfig.json"); err != nil {
+		panic("Can't read config file")
+	}
+	for k, v := range testSets {
+		fmt.Printf("Testing endpoint %s\n", k)
+		go TestEndpoint(v, c)
 		success := <-c
 		if !success {
-			fmt.Printf("%s failed testing\n", endpoint)
+			fmt.Printf("%s failed testing\n", k)
 		} else {
-			fmt.Printf("%s passed testing\n", endpoint)
+			fmt.Printf("%s passed testing\n", k)
 		}
 	}
 

@@ -1,0 +1,20 @@
+[
+  {
+    "dnsname" : "stashcache.grid.uchicago.edu",
+    "sitename" : "UC_STASH_ORIGIN",
+    "hashfile" : "/user/sthapa/test-sets/filetest/hashes",
+    "testsetname" : "MULTIPLE_FILE_TEST",
+    "testfiles" : [ "/user/sthapa/public/test-sets/filetest/test_file.0",
+      "/user/sthapa/public/test-sets/filetest/test_file.1"]
+  },
+  {
+    "dnsname" : "hcc-stash.unl.edu",
+    "sitename" : "UNL_STASH_ORIGIN",
+    "hashfile" : "/user/sthapa/test-sets/filetest/hashes",
+    "testsetname" : "MULTIPLE_FILE_TEST",
+    "testfiles" : [ "/user/sthapa/public/test-sets/filetest/test_file.0",
+      "/user/sthapa/public/test-sets/filetest/test_file.1"]
+
+  }
+
+]

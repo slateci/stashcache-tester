@@ -38,26 +38,26 @@ type TestSet struct {
 }
 
 type ESPayload struct {
-	Cache            string  `json:cache`
-	DestinationSpace string  `json:destination_space`
-	DownloadSize     int64   `json:download_size`
-	DownloadTime     float64 `json:download_time`
-	End1             int64   `json:end1`
-	End2             int64   `json:end2`
-	End3             int64   `json:end3`
-	FileName         string  `json:filename`
-	FileSize         int64   `json:filesize`
-	Host             string  `json:host`
-	SiteName         string  `json:sitename`
-	Start1           int64   `json:start1`
-	Start2           int64   `json:start2`
-	Start3           int64   `json:start3`
-	Status           string  `json:status`
-	TimeStamp        int64   `json:timestamp`
-	Tries            int     `json:tries`
-	XRDcpVersion     string  `json:xrdcp_version`
-	XRDExit1         string  `json:xrdexit1`
-	XRDExit2         string  `json:xrdexit2`
+	Cache            string  `json:"cache"`
+	DestinationSpace string  `json:"destination_space"`
+	DownloadSize     int64   `json:"download_size"`
+	DownloadTime     float64 `json:"download_time"`
+	End1             int64   `json:"end1"`
+	End2             int64   `json:"end2"`
+	End3             int64   `json:"end3"`
+	FileName         string  `json:"filename"`
+	FileSize         int64   `json:"filesize"`
+	Host             string  `json:"host"`
+	SiteName         string  `json:"sitename"`
+	Start1           int64   `json:"start1"`
+	Start2           int64   `json:"start2"`
+	Start3           int64   `json:"start3"`
+	Status           string  `json:"status"`
+	TimeStamp        int64   `json:"timestamp"`
+	Tries            int     `json:"tries"`
+	XRDcpVersion     string  `json:"xrdcp_version"`
+	XRDExit1         string  `json:"xrdexit1"`
+	XRDExit2         string  `json:"xrdexit2"`
 }
 
 const ESCollector = "http://uct2-collectd.mwt2.org:9951"

@@ -25,6 +25,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 )
 
@@ -35,6 +36,31 @@ type TestSet struct {
 	TestSetName string   `json:"testsetname"`
 	TestFiles   []string `json:"testfiles"`
 }
+
+type ESPayload struct {
+	Cache            string  `json:cache`
+	DestinationSpace string  `json:destination_space`
+	DownloadSize     int64   `json:download_size`
+	DownloadTime     float64 `json:download_time`
+	End1             int64   `json:end1`
+	End2             int64   `json:end2`
+	End3             int64   `json:end3`
+	FileName         string  `json:filename`
+	FileSize         int64   `json:filesize`
+	Host             string  `json:host`
+	SiteName         string  `json:sitename`
+	Start1           int64   `json:start1`
+	Start2           int64   `json:start2`
+	Start3           int64   `json:start3`
+	Status           string  `json:status`
+	TimeStamp        int64   `json:timestamp`
+	Tries            int     `json:tries`
+	XRDcpVersion     string  `json:xrdcp_version`
+	XRDExit1         string  `json:xrdexit1`
+	XRDExit2         string  `json:xrdexit2`
+}
+
+const ESCollector = "http://uct2-collectd.mwt2.org:9951"
 
 func decodeJSON(configLocation string) (map[string][]TestSet, error) {
 	decodedConfig := make(map[string][]TestSet)
@@ -47,7 +73,6 @@ func decodeJSON(configLocation string) (map[string][]TestSet, error) {
 	if err != nil {
 		log.Fatal("Can't decode json from config file")
 	}
-	fmt.Printf("raw:\n%+v\n", rawConfig)
 	for _, val := range rawConfig {
 		if entry, ok := decodedConfig[val.SiteName]; ok {
 			decodedConfig[val.SiteName] = append(entry, val)
@@ -88,9 +113,19 @@ func TestDataSet(ts TestSet, resultChan chan bool) {
 	for _, remoteFile := range ts.TestFiles {
 		// Setup context to terminate commands after 600 seconds
 
+		var payload ESPayload
+
 		origURI := "root://" + ts.DNSName + "/" + remoteFile
 		cmd := exec.CommandContext(ctx, "xrdcp", origURI, ".")
-
+		//  populate payload info to report to ES
+		payload.XRDcpVersion = "stashcache-tester"
+		payload.SiteName = ts.SiteName
+		payload.FileName = filepath.Base(remoteFile)
+		payload.Cache = ts.DNSName
+		payload.Host = ts.DNSName
+		start := time.Now()
+		payload.Start1 = start.Unix() * 1000 // need to multiple by 1000 for ES
+		payload.Tries = 1
 		cmd.Stdout = &out
 		cmd.Env = append(os.Environ(),
 			"XRD_REQUESTTIMEOUT=30",   // Wait 30s before timing out
@@ -101,9 +136,38 @@ func TestDataSet(ts TestSet, resultChan chan bool) {
 			"XRD_STREAMTIMEOUT=30")    // Wait 30s for TCP activity
 
 		if err := cmd.Run(); err != nil {
+			end := time.Now()
+			payload.End1 = end.Unix() * 1000 // need to multiple by 1000 for ES
+			payload.DownloadTime = end.Sub(start).Seconds() * 1000
+			payload.DownloadSize = 0
+			payload.TimeStamp = time.Now().Unix() * 1000 // need to multiple by 1000 for ES
+			payload.Status = "Failure"
+
 			fmt.Printf("Can't download %s\nError: %s\n", origURI, err)
+			ReportTest(payload)
 			resultChan <- false
+			return
+		} else {
+			payload.Status = "Success"
+			payload.XRDExit1 = "0"
+
 		}
+		end := time.Now()
+		payload.End1 = end.Unix() * 1000 // need to multiple by 1000 for ES
+		payload.DownloadTime = end.Sub(start).Seconds() * 1000
+
+		if fileInfo, err := os.Stat(payload.FileName); err != nil {
+			payload.DownloadSize = 0
+			payload.TimeStamp = time.Now().Unix() * 1000 // need to multiple by 1000 for ES
+			ReportTest(payload)
+			resultChan <- false
+			return
+		} else {
+			payload.DownloadSize = fileInfo.Size()
+			payload.FileSize = fileInfo.Size()
+			payload.TimeStamp = time.Now().Unix() * 1000 // need to multiple by 1000 for ES
+		}
+		ReportTest(payload)
 	}
 	cmd := exec.CommandContext(ctx, "sha256sum", "-c", "hashes")
 	cmd.Stdout = &out
@@ -151,6 +215,18 @@ func TestEndpoint(testsets []TestSet, c chan bool) {
 		return
 	}
 	c <- testsSucceeded
+}
+
+func ReportTest(payload ESPayload) {
+	return
+	//fmt.Printf("\n ******\n Payload: %+v \n", payload)
+	//buf := new(bytes.Buffer)
+	//json.NewEncoder(buf).Encode(payload)
+	//_, err := http.Post(ESCollector, "application/json", buf)
+	//if err != nil {
+	//	fmt.Printf("Error reporting test results to ES collector\n")
+	//}
+
 }
 
 func main() {

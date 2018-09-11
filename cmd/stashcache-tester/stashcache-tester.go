@@ -85,6 +85,68 @@ func decodeJSON(configLocation string) (map[string][]TestSet, error) {
 	return decodedConfig, nil
 }
 
+func DownloadXRDFile(uri string, filename string, ts TestSet) (ESPayload, error) {
+	// Setup context to terminate commands after 600 seconds
+
+	var payload ESPayload
+	var out bytes.Buffer
+
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "xrdcp", uri, ".")
+	//  populate payload info to report to ES
+	payload.XRDcpVersion = "stashcache-tester"
+	payload.SiteName = ts.SiteName
+	payload.FileName = filepath.Base(filename)
+	payload.Cache = ts.DNSName
+	payload.Host = ts.DNSName
+	start := time.Now()
+	payload.Start1 = start.Unix() * 1000 // need to multiple by 1000 for ES
+	payload.Tries = 1
+	cmd.Stdout = &out
+	cmd.Env = append(os.Environ(),
+		"XRD_REQUESTTIMEOUT=30",   // Wait 30s before timing out
+		"XRD_CPCHUNKSIZE=8388608", // read 8MB at a time
+		"XRD_TIMEOUTRESOLUTION=5", // Check for timeouts every 5s
+		"XRD_CONNECTIONWINDOW=30", // Wait 30s for initial TCP connection
+		"XRD_CONNECTIONRETRY=2",   // Retry 2 times
+		"XRD_STREAMTIMEOUT=30")    // Wait 30s for TCP activity
+
+	if err := cmd.Run(); err != nil {
+		end := time.Now()
+		payload.End1 = end.Unix() * 1000 // need to multiple by 1000 for ES
+		payload.DownloadTime = end.Sub(start).Seconds() * 1000
+		payload.DownloadSize = 0
+		payload.TimeStamp = time.Now().Unix() * 1000 // need to multiple by 1000 for ES
+		payload.Status = "Failure"
+
+		fmt.Printf("Can't download %s\nError: %s\n", uri, err)
+		ReportTest(payload)
+		return payload, fmt.Errorf("Can't download %s\nError: %s\n", uri, err)
+	} else {
+		payload.Status = "Success"
+		payload.XRDExit1 = "0"
+
+	}
+	end := time.Now()
+	payload.End1 = end.Unix() * 1000 // need to multiple by 1000 for ES
+	payload.DownloadTime = end.Sub(start).Seconds() * 1000
+
+	if fileInfo, err := os.Stat(payload.FileName); err != nil {
+		payload.DownloadSize = 0
+		payload.TimeStamp = time.Now().Unix() * 1000 // need to multiple by 1000 for ES
+		ReportTest(payload)
+		return payload, fmt.Errorf("Can't state file %s\nError: %s\n", payload.FileName, err)
+	} else {
+		payload.DownloadSize = fileInfo.Size()
+		payload.FileSize = fileInfo.Size()
+		payload.TimeStamp = time.Now().Unix() * 1000 // need to multiple by 1000 for ES
+	}
+
+	return payload, nil
+}
+
 func TestDataSet(ts TestSet, resultChan chan bool) {
 
 	workingDir, err := ioutil.TempDir(".", "")
@@ -106,76 +168,36 @@ func TestDataSet(ts TestSet, resultChan chan bool) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
-	defer cancel()
-
-	var out bytes.Buffer
 	for _, remoteFile := range ts.TestFiles {
 		// Setup context to terminate commands after 600 seconds
 
-		var payload ESPayload
-
 		origURI := "root://" + ts.DNSName + "/" + remoteFile
-		cmd := exec.CommandContext(ctx, "xrdcp", origURI, ".")
-		//  populate payload info to report to ES
-		payload.XRDcpVersion = "stashcache-tester"
-		payload.SiteName = ts.SiteName
-		payload.FileName = filepath.Base(remoteFile)
-		payload.Cache = ts.DNSName
-		payload.Host = ts.DNSName
-		start := time.Now()
-		payload.Start1 = start.Unix() * 1000 // need to multiple by 1000 for ES
-		payload.Tries = 1
-		cmd.Stdout = &out
-		cmd.Env = append(os.Environ(),
-			"XRD_REQUESTTIMEOUT=30",   // Wait 30s before timing out
-			"XRD_CPCHUNKSIZE=8388608", // read 8MB at a time
-			"XRD_TIMEOUTRESOLUTION=5", // Check for timeouts every 5s
-			"XRD_CONNECTIONWINDOW=30", // Wait 30s for initial TCP connection
-			"XRD_CONNECTIONRETRY=2",   // Retry 2 times
-			"XRD_STREAMTIMEOUT=30")    // Wait 30s for TCP activity
-
-		if err := cmd.Run(); err != nil {
-			end := time.Now()
-			payload.End1 = end.Unix() * 1000 // need to multiple by 1000 for ES
-			payload.DownloadTime = end.Sub(start).Seconds() * 1000
-			payload.DownloadSize = 0
-			payload.TimeStamp = time.Now().Unix() * 1000 // need to multiple by 1000 for ES
-			payload.Status = "Failure"
-
-			fmt.Printf("Can't download %s\nError: %s\n", origURI, err)
-			ReportTest(payload)
+		payload, err := DownloadXRDFile(origURI, filepath.Base(remoteFile), ts)
+		if err != nil {
 			resultChan <- false
-			return
-		} else {
-			payload.Status = "Success"
-			payload.XRDExit1 = "0"
-
-		}
-		end := time.Now()
-		payload.End1 = end.Unix() * 1000 // need to multiple by 1000 for ES
-		payload.DownloadTime = end.Sub(start).Seconds() * 1000
-
-		if fileInfo, err := os.Stat(payload.FileName); err != nil {
-			payload.DownloadSize = 0
-			payload.TimeStamp = time.Now().Unix() * 1000 // need to multiple by 1000 for ES
-			ReportTest(payload)
-			resultChan <- false
-			return
-		} else {
-			payload.DownloadSize = fileInfo.Size()
-			payload.FileSize = fileInfo.Size()
-			payload.TimeStamp = time.Now().Unix() * 1000 // need to multiple by 1000 for ES
 		}
 		ReportTest(payload)
 	}
+	hashURI := "root://" + ts.DNSName + "/" + ts.HashFile
+	_, err = DownloadXRDFile(hashURI, filepath.Base(ts.HashFile), ts)
+	if err != nil {
+		fmt.Printf("Can't download file hash: %s\n", err)
+		resultChan <- false
+		return
+	}
+
+	var out bytes.Buffer
+
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, "sha256sum", "-c", "hashes")
 	cmd.Stdout = &out
 	err = cmd.Run()
 	if err != nil {
 		fmt.Printf("Can't verify file hashes: %s\n", err)
 		resultChan <- false
-
+		return
 	}
 	resultChan <- true
 }

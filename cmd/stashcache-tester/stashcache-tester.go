@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +36,11 @@ type TestSet struct {
 	HashFile    string   `json:"hashfile"`
 	TestSetName string   `json:"testsetname"`
 	TestFiles   []string `json:"testfiles"`
+}
+
+type TestResult struct {
+	success bool
+	result  error
 }
 
 type ESPayload struct {
@@ -147,24 +153,34 @@ func DownloadXRDFile(uri string, filename string, ts TestSet) (ESPayload, error)
 	return payload, nil
 }
 
-func TestDataSet(ts TestSet, resultChan chan bool) {
+func TestDataSet(ts TestSet, resultChan chan TestResult) {
+
+	var result = TestResult{false, fmt.Errorf("")}
 
 	workingDir, err := ioutil.TempDir(".", "")
 	if err != nil {
 		fmt.Printf("Couldn't create directory for %s\n", workingDir)
+		result.success = false
+		result.result = fmt.Errorf("couldn't create directory for %s", workingDir)
+		resultChan <- result
+		return
 	}
 	defer os.RemoveAll(workingDir)
 
 	curDir, err := os.Getwd()
 	if err != nil {
 		fmt.Println("Couldn't get current directory")
-		resultChan <- false
+		result.success = false
+		result.result = fmt.Errorf("couldn't get current directory")
+		resultChan <- result
 		return
 	}
 	defer os.Chdir(curDir)
 	if err := os.Chdir(workingDir); err != nil {
 		fmt.Println("Can't change to working directory")
-		resultChan <- false
+		result.success = false
+		result.result = fmt.Errorf("can't change to working directory")
+		resultChan <- result
 		return
 	}
 
@@ -174,7 +190,10 @@ func TestDataSet(ts TestSet, resultChan chan bool) {
 		origURI := "root://" + ts.DNSName + "/" + remoteFile
 		payload, err := DownloadXRDFile(origURI, filepath.Base(remoteFile), ts)
 		if err != nil {
-			resultChan <- false
+			result.success = false
+			result.result = fmt.Errorf("can't download %s", origURI)
+			resultChan <- result
+			return
 		}
 		ReportTest(payload)
 	}
@@ -182,7 +201,9 @@ func TestDataSet(ts TestSet, resultChan chan bool) {
 	_, err = DownloadXRDFile(hashURI, filepath.Base(ts.HashFile), ts)
 	if err != nil {
 		fmt.Printf("Can't download file hash: %s\n", err)
-		resultChan <- false
+		result.success = false
+		result.result = fmt.Errorf("can't download file hash: %s", err)
+		resultChan <- result
 		return
 	}
 
@@ -196,10 +217,14 @@ func TestDataSet(ts TestSet, resultChan chan bool) {
 	err = cmd.Run()
 	if err != nil {
 		fmt.Printf("Can't verify file hashes: %s\n", err)
-		resultChan <- false
+		result.success = false
+		result.result = fmt.Errorf("can't verify file hashes: %s", err)
+		resultChan <- result
 		return
 	}
-	resultChan <- true
+	result.success = true
+	result.result = nil
+	resultChan <- result
 }
 
 func TestEndpoint(testsets []TestSet, c chan bool) {
@@ -222,14 +247,37 @@ func TestEndpoint(testsets []TestSet, c chan bool) {
 		return
 	}
 
-	testResultChan := make(chan bool)
+	testResultChan := make(chan TestResult)
 	for _, ts := range testsets {
+		var payload ESPayload
+		payload.SiteName = ts.SiteName
+		payload.FileName = ""
+		payload.Cache = ts.DNSName
+		payload.Host = ts.DNSName
+		start := time.Now()
+		payload.Start1 = start.Unix() * 1000 // need to multiple by 1000 for ES
+		payload.Tries = 1
+		payload.XRDcpVersion = "stashcache-tester-testresult"
+
 		go TestDataSet(ts, testResultChan)
-		success := <-testResultChan
-		testsSucceeded = testsSucceeded && success
-		if !success {
+		result := <-testResultChan
+
+		end := time.Now()
+		payload.End1 = end.Unix() * 1000 // need to multiple by 1000 for ES
+		payload.DownloadTime = end.Sub(start).Seconds() * 1000
+
+		testsSucceeded = testsSucceeded && result.success
+		if !result.success {
 			fmt.Printf("Failed to verify %s using endpoint %s\n", ts.TestSetName, ts.SiteName)
+			payload.Status = fmt.Sprintf("Failure")
+			payload.DestinationSpace = fmt.Sprintf("%s", result.result)
+			payload.XRDExit1 = "0"
+			ReportTest(payload)
+			return
 		}
+		payload.Status = "Success"
+		payload.XRDExit1 = "0"
+		ReportTest(payload)
 	}
 
 	if os.Chdir(curDir) != nil {
@@ -240,14 +288,12 @@ func TestEndpoint(testsets []TestSet, c chan bool) {
 }
 
 func ReportTest(payload ESPayload) {
-	return
-	//fmt.Printf("\n ******\n Payload: %+v \n", payload)
-	//buf := new(bytes.Buffer)
-	//json.NewEncoder(buf).Encode(payload)
-	//_, err := http.Post(ESCollector, "application/json", buf)
-	//if err != nil {
-	//	fmt.Printf("Error reporting test results to ES collector\n")
-	//}
+	buf := new(bytes.Buffer)
+	json.NewEncoder(buf).Encode(payload)
+	_, err := http.Post(ESCollector, "application/json", buf)
+	if err != nil {
+		fmt.Printf("Error reporting test results to ES collector\n")
+	}
 
 }
 

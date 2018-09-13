@@ -228,7 +228,7 @@
     "dnsname" : "hcc-stash.unl.edu",
     "sitename" : "UNL_STASH_ORIGIN",
     "hashfile" : "/user/sthapa/test-sets/hashes",
-    "testsetname" : "MULTIPLE_FILE_TEST",
+    "testsetname" : "FILE_SIZE_TEST",
     "testfiles" : [ "/user/sthapa/public/test-sets/test.1M",
       "/user/sthapa/public/test-sets/test.100M",
       "/user/sthapa/public/test-sets/test.1024M"]
